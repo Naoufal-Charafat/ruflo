@@ -11,8 +11,13 @@
  * every OS (see the `node -e` bootstrap command in ../hooks/hooks.json).
  * It replicates, in pure Node with no shell/jq dependency:
  *   - modify-bash / modify-file  (PreToolUse)  — best-effort CLI call, then
- *     ALWAYS echo `{"permission":"allow"}` on stdout (Cursor's PreToolUse
- *     contract requires valid-JSON stdout; Claude Code ignores it).
+ *     emit `{"permission":"allow"}` for Cursor/Claude compatibility. Codex
+ *     plugin hooks are detected by their Codex-specific PLUGIN_ROOT /
+ *     PLUGIN_DATA variables, falling back to the `turn_id` field Codex
+ *     always includes in the hook event JSON, and intentionally receive
+ *     empty stdout: a bare Cursor permission object is not valid Codex
+ *     hook JSON and is rejected with "hook returned invalid pre-tool-use
+ *     JSON output" (#2816, #2856).
  *   - post-command / post-edit  (PostToolUse)  — parse the hook event JSON
  *     from stdin (no jq), extract the same fields the bash version pulled
  *     with jq, and forward them as CLI flags.
@@ -37,6 +42,9 @@
 
 const { spawnSync, execSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 
 /** Exit 0 unconditionally — hooks must never block a turn */
 function done() {
@@ -166,6 +174,58 @@ function parseEventJson(stdinData) {
 }
 
 /**
+ * Project-installed hooks and marketplace-plugin hooks can receive the same
+ * event. Claim side-effecting events atomically so post-edit learning and
+ * session-end consolidation execute exactly once (#2640).
+ */
+function claimSideEffectEvent(family, stdinData, event) {
+  if (/^(1|true|yes|on)$/i.test(process.env.RUFLO_DISABLE_HOOK_DEDUP || '')) return true;
+  try {
+    const eventId = event?.tool_use_id || event?.toolUseId ||
+      event?.session_id || event?.sessionId || event?.hook_event_id;
+    const payloadIdentity = eventId
+      ? `event:${eventId}`
+      : `payload:${(stdinData || '').trim()}|bucket:${Math.floor(Date.now() / 2000)}`;
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const digest = crypto.createHash('sha256')
+      .update(`ruflo-hook-dedup-v1\0${path.resolve(projectRoot)}\0${family}\0${payloadIdentity}`)
+      .digest('hex');
+    const dir = process.env.RUFLO_HOOK_DEDUP_DIR ||
+      path.join(os.tmpdir(), 'ruflo-hook-dedup-v1');
+    fs.mkdirSync(dir, { recursive: true });
+    const fd = fs.openSync(path.join(dir, digest), 'wx', 0o600);
+    fs.writeFileSync(fd, String(Date.now()));
+    fs.closeSync(fd);
+    return true;
+  } catch (error) {
+    return error?.code === 'EEXIST' ? false : true;
+  }
+}
+
+/**
+ * Codex sets PLUGIN_ROOT and PLUGIN_DATA for plugin-bundled hooks, in
+ * addition to the cross-host CLAUDE_PLUGIN_* compatibility variables.
+ * Cursor and Claude Code use CLAUDE_PLUGIN_ROOT without these Codex-specific
+ * variables. Keep this positive Codex check narrow so existing Cursor
+ * installations retain their permission response.
+ *
+ * Fallback: Codex's PreToolUse input JSON always carries a `turn_id` string
+ * field (verified against codex-rs' pre-tool-use.command.input schema —
+ * it is Codex's own documented extension, not present in Claude Code's or
+ * Cursor's hook payloads). This catches any install/config path where the
+ * PLUGIN_ROOT/PLUGIN_DATA env vars aren't injected, so a stray Cursor-shaped
+ * `{"permission":"allow"}` object never reaches Codex's stricter parser
+ * (#2856): Codex's output_parser rejects unknown top-level keys outright
+ * and reports "hook returned invalid pre-tool-use JSON output" for any
+ * JSON-shaped stdout it can't fit into its schema, whereas empty stdout is
+ * treated as no-opinion/implicit-allow with no error.
+ */
+function isCodexPluginHost(event) {
+  if (process.env.PLUGIN_ROOT || process.env.PLUGIN_DATA) return true;
+  return typeof event?.turn_id === 'string' && event.turn_id.length > 0;
+}
+
+/**
  * PreCompact guidance text — matches the bash `echo` lines verbatim.
  * Not a CLI call at all; pure stdout guidance for the transcript/context.
  */
@@ -214,10 +274,15 @@ function main() {
   }
 
   const stdinData = readStdinRaw();
+  const event = parseEventJson(stdinData);
+
+  if ((subcommand === 'post-edit' || subcommand === 'session-end') &&
+      !claimSideEffectEvent(subcommand, stdinData, event)) {
+    done();
+  }
 
   // PostToolUse: derive CLI flags from the hook event JSON (replaces jq).
   if (subcommand === 'post-command') {
-    const event = parseEventJson(stdinData);
     const cmd = event?.tool_input?.command;
     if (!cmd) done(); // bash version: `[ -z "$CMD" ] && exit 0`
     const exitCode = event?.tool_response?.exit_code ?? 0;
@@ -225,18 +290,19 @@ function main() {
     done();
   }
   if (subcommand === 'post-edit') {
-    const event = parseEventJson(stdinData);
     const file = event?.tool_input?.file_path ?? event?.tool_input?.path;
     if (!file) done(); // bash version: `[ -z "$FILE" ] && exit 0`
     invokeCli('post-edit', ['-f', String(file), '-s', 'true'], stdinData);
     done();
   }
 
-  // PreToolUse: best-effort CLI call, then ALWAYS echo the permission verdict
-  // (Cursor's stricter preToolUse contract requires valid-JSON stdout).
+  // PreToolUse: telemetry always runs. Cursor retains its permission verdict;
+  // Codex unconditional allow is exit 0 with empty stdout (#2816).
   if (subcommand === 'modify-bash' || subcommand === 'modify-file') {
     invokeCli(subcommand, [], stdinData);
-    process.stdout.write('{"permission":"allow"}');
+    if (!isCodexPluginHost(event)) {
+      process.stdout.write('{"permission":"allow"}');
+    }
     done();
   }
 

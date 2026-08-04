@@ -49,6 +49,7 @@ const commandLoaders: Record<string, CommandLoader> = {
   plugins: () => import('./plugins.js'),
   deployment: () => import('./deployment.js'),
   claims: () => import('./claims.js'),
+  policy: () => import('./policy.js'),
   embeddings: () => import('./embeddings.js'),
   // P0 Commands
   completions: () => import('./completions.js'),
@@ -98,6 +99,10 @@ const commandLoaders: Record<string, CommandLoader> = {
   spinner: () => import('./spinner.js'),
   // Ruflo entries in Claude Code's companyAnnouncements startup rotation (ADR-319)
   announcements: () => import('./announcements.js'),
+  // AGNTCY/Outshift runtime transport selection (ADR-324 §2) — optional,
+  // removable augmentation; no-ops to local transport when AGNTCY/SLIM is
+  // not configured (RUFLO_AGNTCY_SLIM_ENDPOINT unset).
+  transport: () => import('./agntcy/transport.js'),
 };
 
 // Cache for loaded commands
@@ -195,6 +200,7 @@ export async function getProvidersCommand() { return loadCommand('providers'); }
 export async function getPluginsCommand() { return loadCommand('plugins'); }
 export async function getDeploymentCommand() { return loadCommand('deployment'); }
 export async function getClaimsCommand() { return loadCommand('claims'); }
+export async function getPolicyCommand() { return loadCommand('policy'); }
 export async function getEmbeddingsCommand() { return loadCommand('embeddings'); }
 export async function getCompletionsCommand() { return loadCommand('completions'); }
 export async function getAnalyzeCommand() { return loadCommand('analyze'); }
@@ -206,6 +212,7 @@ export async function getGuidanceCommand() { return loadCommand('guidance'); }
 export async function getApplianceCommand() { return loadCommand('appliance'); }
 export async function getCleanupCommand() { return loadCommand('cleanup'); }
 export async function getAutopilotCommand() { return loadCommand('autopilot'); }
+export async function getTransportCommand() { return loadCommand('transport'); }
 
 /**
  * Core commands loaded synchronously (available immediately)
@@ -260,7 +267,7 @@ export async function getCommandsByCategory(): Promise<Record<string, Command[]>
     analyzeCmd, routeCmd, progressCmd, providersCmd,
     pluginsCmd, deploymentCmd, claimsCmd, issuesCmd,
     updateCmd, processCmd, guidanceCmd, applianceCmd,
-    cleanupCmd, autopilotCmd,
+    cleanupCmd, autopilotCmd, policyCmd,
   ] = await Promise.all([
     loadCommand('daemon'), loadCommand('doctor'), loadCommand('embeddings'), loadCommand('neural'),
     loadCommand('performance'), loadCommand('security'), loadCommand('ruvector'), loadCommand('hive-mind'),
@@ -268,7 +275,7 @@ export async function getCommandsByCategory(): Promise<Record<string, Command[]>
     loadCommand('analyze'), loadCommand('route'), loadCommand('progress'), loadCommand('providers'),
     loadCommand('plugins'), loadCommand('deployment'), loadCommand('claims'), loadCommand('issues'),
     loadCommand('update'), loadCommand('process'), loadCommand('guidance'), loadCommand('appliance'),
-    loadCommand('cleanup'), loadCommand('autopilot'),
+    loadCommand('cleanup'), loadCommand('autopilot'), loadCommand('policy'),
   ]);
 
   return {
@@ -278,7 +285,7 @@ export async function getCommandsByCategory(): Promise<Record<string, Command[]>
       mcpCommand, hooksCommand,
     ],
     advanced: [
-      neuralCmd, securityCmd, performanceCmd, embeddingsCmd,
+      neuralCmd, securityCmd, policyCmd, performanceCmd, embeddingsCmd,
       hiveMindCmd, ruvectorCmd, guidanceCmd, autopilotCmd,
     ].filter(Boolean) as Command[],
     utility: [

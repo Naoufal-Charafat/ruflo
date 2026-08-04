@@ -134,6 +134,27 @@ export {
   type ToolCallDecision,
 } from './authorization/propagator.js';
 
+// MCP Caller-Identity Binding (ADR-377 Phase 3 — ruvnet/ruflo#2516, #2873)
+// Per-invocation Ed25519-signed capability tokens. Off by default
+// (CLAUDE_FLOW_MCP_CALLER_AUTH) pending a follow-on ADR for key
+// distribution; see mcp-caller-identity.ts's file header for scope notes.
+export {
+  generateCallerIdentityKey,
+  loadCallerIdentityKey,
+  issueInvocationToken,
+  verifyInvocationToken,
+  isMcpCallerAuthEnabled,
+  type CallerIdentityKey,
+  type InvocationToken,
+  type TokenVerificationResult,
+} from './mcp-caller-identity.js';
+
+// Agentic Policy Engine (ADR-324)
+// Deterministic policy evaluation, monotonic capability envelopes, approvals,
+// budgets, and tamper-evident decision receipts. Legacy mode preserves the
+// behavior of pre-ADR-324 installations until enforcement is explicitly enabled.
+export * from './policy/index.js';
+
 // OAuth 2.0 + PKCE + OS Keychain (ADR-306)
 // A TypeScript port of meta-proxy's proven oauth/{client,pkce,browser,
 // callback_server}.rs — see src/oauth/client.ts for why this targets the
@@ -177,6 +198,26 @@ export {
   type VerificationResult,
   type VerifierConfig,
 } from './plugins/integrity-verifier.js';
+
+// MCP Tool Composition Inspector (ADR-320 — ruvnet/ruflo dream-cycle,
+// arXiv:2606.27027 "ShareLock"). SimHash-based cross-tool instruction
+// fragment detector — the v2 successor to the CLI-only v1 in
+// @claude-flow/cli/src/security/mcp-composition-inspector.ts (#2783),
+// whose own header deferred exactly this ("Future v2: SimHash + LSH").
+export {
+  inspectToolComposition,
+  evaluateToolComposition,
+  isCompositionBlockEnabled,
+  fnv1a64,
+  simhash64,
+  hammingDistance64,
+  type McpToolDescriptor,
+  type CompositionInspectorOptions,
+  type CompositionFinding,
+  type CompositionInspectionStats,
+  type CompositionInspectionResult,
+  type CompositionGuardResult,
+} from './mcp-composition-inspector.js';
 
 // ============================================================================
 // Convenience Factory Functions
